@@ -7,6 +7,8 @@
   "license": "MIT",
   "private": true,
   "dependencies": {
-    "glob": "^7.1.6"
+    "glob": "^7.1.6",
+    "pg": "^8.3.0",
+    "pg-copy-streams": "^5.1.1"
   }
 }

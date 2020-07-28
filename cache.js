@@ -1,46 +1,128 @@
 const fs = require('fs');
 const glob = require('glob');
 const path = require('path');
+const { Pool } = require('pg');
+const copyFrom = require('pg-copy-streams').from
 
-if (!process.argv[2]) {
+const pool = new Pool({
+    host: 'localhost',
+    user: 'postgres',
+    database: 'oalogs'
+});
+
+if (!process.argv[2] || !process.argv[3]) {
     console.error();
-    console.error('Usage: node cache.js <openaddresses path>');
+    console.error('Usage: node cache.js <openaddresses path> <s3 inventory.csv>');
     console.error();
+    console.error('Download s3 inventory from s3://logs.openaddresses.io/s3inventories/data.openaddresses.io/all-objects-in-data/data/');
+    console.error();
+    return;
 }
 
-glob(path.resolve(process.argv[2], 'sources/**/*.json'), {
-    nodir: false
-}, (err, files) => {
-    if (err) throw err;
+main();
 
-    for (const file of files) {
-        const psd = JSON.parse(fs.readFileSync(file))
-
-        if (psd.schema === 2) continue;
-
-        if (psd.coverage.city) name = 'city';
-        if (psd.coverage.town) name = 'town';
-        if (psd.coverage.county) name = 'county';
-        if (psd.coverage.district) name = 'district';
-        if (psd.coverage.region) name = 'region';
-        if (psd.coverage.province) name = 'province';
-        if (psd.coverage.state) name = 'state';
-        if (psd.coverage.country) name = 'country';
-
-        psd.schema = 2;
-        psd.layers = {
-            addresses: [{
-                name: name
-            }]
-        }
-
-        for (const key of Object.keys(psd)) {
-            if (['coverage', 'layers', 'schema'].includes(key)) continue;
-
-            psd.layers.addresses[0][key] = psd[key];
-            delete psd[key];
-        }
-
-        fs.writeFileSync(file, JSON.stringify(psd, null, 4));
+async function main() {
+    try {
+        await logs();
+    } catch(err) {
+        console.error(err);
     }
-})
+}
+
+async function logs() {
+    return new Promise((resolve, reject) => {
+        pool.connect((err, client, done) => {
+            if (err) return reject(err);
+
+            client.query(`
+                CREATE TABLE IF NOT EXISTS logs (
+                    bucket      TEXT,
+                    file        TEXT,
+                    size        BIGINT,
+                    modified    TIMESTAMP,
+                    hash        TEXT,
+                    zone        TEXT
+                );
+            `, (err) => {
+                if (err) return reject(err);
+
+                glob(path.resolve(process.argv[3], '*.csv'), {
+                    nodir: false
+                }, async (err, files) => {
+                    if (err) return reject(err);
+
+                    for (const file of files) {
+                        try {
+                            await single_log(client, file);
+                        } catch (err) {
+                            return reject(new Error(err));
+                        }
+                    }
+
+                    return resolve();
+                });
+            });
+        });
+    });
+}
+
+async function single_log(client, file) {
+    return new Promise((resolve, reject) => {
+        const stream = client.query(copyFrom(`
+            COPY logs (
+                bucket,
+                file,
+                size,
+                modified,
+                hash,
+                zone
+            ) FROM STDIN DELIMITER ',' CSV;
+        `));
+        const fileStream = fs.createReadStream(file)
+        fileStream.on('error', reject);
+        stream.on('error', reject);
+        stream.on('finish', () => {
+            return resolve();
+        });
+        fileStream.pipe(stream);
+    });
+}
+
+function convert() {
+    glob(path.resolve(process.argv[2], 'sources/**/*.json'), {
+        nodir: false
+    }, (err, files) => {
+        if (err) throw err;
+
+        for (const file of files) {
+            const psd = JSON.parse(fs.readFileSync(file))
+
+            if (psd.schema === 2) continue;
+
+            if (psd.coverage.city) name = 'city';
+            if (psd.coverage.town) name = 'town';
+            if (psd.coverage.county) name = 'county';
+            if (psd.coverage.district) name = 'district';
+            if (psd.coverage.region) name = 'region';
+            if (psd.coverage.province) name = 'province';
+            if (psd.coverage.state) name = 'state';
+            if (psd.coverage.country) name = 'country';
+
+            psd.schema = 2;
+            psd.layers = {
+                addresses: [{
+                    name: name
+                }]
+            }
+
+            for (const key of Object.keys(psd)) {
+                if (['coverage', 'layers', 'schema'].includes(key)) continue;
+
+                psd.layers.addresses[0][key] = psd[key];
+                delete psd[key];
+            }
+
+            fs.writeFileSync(file, JSON.stringify(psd, null, 4));
+        }
+    })
+}
