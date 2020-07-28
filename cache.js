@@ -65,12 +65,17 @@ async function logs() {
                     DELETE FROM parsed;
                 `);
 
+                await client.query(`
+                    DROP INDEX IF EXISTS log_source;
+                `);
+
                 glob(path.resolve(process.argv[3], '*.csv'), {
                     nodir: false
                 }, async (err, files) => {
                     if (err) return reject(err);
 
                     for (const file of files) {
+                        console.error(`ok - importing ${file}`);
                         try {
                             await single_log(client, file);
                         } catch (err) {
@@ -117,6 +122,7 @@ async function logs_optimize() {
             if (err) return reject(err);
 
             try {
+                console.error('ok - populating parsed');
                 await client.query(`
                     INSERT INTO parsed (
                         file,
@@ -126,17 +132,18 @@ async function logs_optimize() {
                     ) (
                         SELECT
                             file,
-                            regexp_replace(file, 'runs/(\d+)/.*', '\\1')::BIGINT,
-                            replace(replace(regexp_replace(file, 'runs/(\d+)/', ''), '/', '-'), '.zip', ''),
+                            regexp_replace(replace(file, 'runs/', ''), '/.*', '')::BIGINT,
+                            replace(replace(regexp_replace(file, 'runs/(\d+)/', ''), '/', '-'), '.zip', '') AS source,
                             modified
                         FROM
                             logs
                         WHERE
-                            file LIKE 'runs/%.zip'
+                            file ~ 'runs/[0-9]+/.*zip'
                             AND file NOT LIKE 'runs/%/cache.zip'
                     )
                 `);
 
+                console.error('ok - creating source index');
                 await client.query(`
                     CREATE INDEX log_source
                         ON parsed (source);
