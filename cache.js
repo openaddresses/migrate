@@ -24,7 +24,8 @@ main();
 async function main() {
     try {
         await logs();
-        convert();
+        await logs_optimize();
+        async convert();
     } catch(err) {
         console.error(err);
     }
@@ -35,40 +36,54 @@ async function logs() {
         pool.connect((err, client, done) => {
             if (err) return reject(err);
 
-            client.query(`
-                CREATE TABLE IF NOT EXISTS logs (
-                    bucket      TEXT,
-                    file        TEXT,
-                    size        BIGINT,
-                    modified    TIMESTAMP,
-                    hash        TEXT,
-                    zone        TEXT
-                );
-            `, (err) => {
-                if (err) return reject(err);
+            try {
+                await client.query(`
+                    CREATE TABLE IF NOT EXISTS logs (
+                        bucket      TEXT,
+                        file        TEXT,
+                        size        BIGINT,
+                        modified    TIMESTAMP,
+                        hash        TEXT,
+                        zone        TEXT
+                    );
+                `);
 
-                client.query(`
+                await client.query(`
+                    CREATE TABLE IF NOT EXISTS parsed (
+                        file        TEXT,
+                        run         BIGINT,
+                        source      TEXT,
+                        modified    TIMESTAMP
+                    );
+                `);
+
+                await client.query(`
                     DELETE FROM logs;
-                `, (err) => {
+                `);
+
+                await client.query(`
+                    DELETE FROM parsed;
+                `);
+
+                glob(path.resolve(process.argv[3], '*.csv'), {
+                    nodir: false
+                }, async (err, files) => {
                     if (err) return reject(err);
 
-                    glob(path.resolve(process.argv[3], '*.csv'), {
-                        nodir: false
-                    }, async (err, files) => {
-                        if (err) return reject(err);
-
-                        for (const file of files) {
-                            try {
-                                await single_log(client, file);
-                            } catch (err) {
-                                return reject(new Error(err));
-                            }
+                    for (const file of files) {
+                        try {
+                            await single_log(client, file);
+                        } catch (err) {
+                            return reject(new Error(err));
                         }
+                    }
 
-                        return resolve();
-                    });
+                    client.end();
+                    return resolve();
                 });
-            });
+            } catch (err) {
+                return reject(err);
+            }
         });
     });
 }
@@ -95,41 +110,108 @@ async function single_log(client, file) {
     });
 }
 
-function convert() {
-    glob(path.resolve(process.argv[2], 'sources/**/*.json'), {
-        nodir: false
-    }, (err, files) => {
-        if (err) throw err;
+async logs_optimize() {
+    return new Promise((resolve, reject) => {
+        console.error('ok - optimizing logs');
+        pool.connect((err, client, done) => {
+            if (err) return reject(err);
 
-        for (const file of files) {
-            const psd = JSON.parse(fs.readFileSync(file))
+            try {
+                await client.query(`
+                    INSERT INTO parsed (
+                        file,
+                        run,
+                        source,
+                        modified
+                    ) (
+                        SELECT
+                            file,
+                            regexp_replace(file, 'runs/(\d+)/.*', '\1')::BIGINT,
+                            replace(replace(regexp_replace(file, 'runs/(\d+)/', ''), '/', '-'), '.zip', ''),
+                            modified
+                        FROM
+                            logs
+                        WHERE
+                            file LIKE 'runs/%.zip'
+                            AND file NOT LIKE 'runs/%/cache.zip'
+                    )
+                `);
 
-            if (psd.schema === 2) continue;
+                await client.query(`
+                    CREATE INDEX log_source
+                        ON parsed (source);
+                `);
 
-            if (psd.coverage.city) name = 'city';
-            if (psd.coverage.town) name = 'town';
-            if (psd.coverage.county) name = 'county';
-            if (psd.coverage.district) name = 'district';
-            if (psd.coverage.region) name = 'region';
-            if (psd.coverage.province) name = 'province';
-            if (psd.coverage.state) name = 'state';
-            if (psd.coverage.country) name = 'country';
+                client.end()
+                return resolve();
 
-            psd.schema = 2;
-            psd.layers = {
-                addresses: [{
-                    name: name
-                }]
+            } catch (err) {
+                return reject(err);
             }
+        });
+    });
+}
 
-            for (const key of Object.keys(psd)) {
-                if (['coverage', 'layers', 'schema'].includes(key)) continue;
+async lookup(client, source) {
+    return new Promise((resolve, reject) => {
+        client.query(`
+            SELECT
+                *
+            FROM
+                parsed
+            WHERE
+                source = ${source}
+            ORDER BY
+                modified DESC
+        `, (err, pgres) => {
+            if (err) return reject(err);
 
-                psd.layers.addresses[0][key] = psd[key];
-                delete psd[key];
+            console.error(pgres);
+
+            return resolve();
+        });
+    });
+}
+
+async function convert() {
+    pool.connect((err, client, done) => {
+        if (err) return reject(err);
+
+        glob(path.resolve(process.argv[2], 'sources/**/*.json'), {
+            nodir: false
+        }, (err, files) => {
+            if (err) throw err;
+
+            for (const file of files) {
+                const psd = JSON.parse(fs.readFileSync(file))
+
+                if (psd.schema === 2) continue;
+
+                if (psd.coverage.city) name = 'city';
+                if (psd.coverage.town) name = 'town';
+                if (psd.coverage.county) name = 'county';
+                if (psd.coverage.district) name = 'district';
+                if (psd.coverage.region) name = 'region';
+                if (psd.coverage.province) name = 'province';
+                if (psd.coverage.state) name = 'state';
+                if (psd.coverage.country) name = 'country';
+
+                psd.schema = 2;
+                psd.layers = {
+                    addresses: [{
+                        name: name
+                    }]
+                }
+
+                for (const key of Object.keys(psd)) {
+                    if (['coverage', 'layers', 'schema'].includes(key)) continue;
+
+                    psd.layers.addresses[0][key] = psd[key];
+                    delete psd[key];
+                }
+
+                fs.writeFileSync(file, JSON.stringify(psd, null, 4));
             }
-
-            fs.writeFileSync(file, JSON.stringify(psd, null, 4));
-        }
-    })
+        });
+    });
 }
