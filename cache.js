@@ -25,7 +25,7 @@ async function main() {
     try {
         await logs();
         await logs_optimize();
-        async convert();
+        await convert();
     } catch(err) {
         console.error(err);
     }
@@ -33,7 +33,7 @@ async function main() {
 
 async function logs() {
     return new Promise((resolve, reject) => {
-        pool.connect((err, client, done) => {
+        pool.connect(async (err, client, done) => {
             if (err) return reject(err);
 
             try {
@@ -110,10 +110,10 @@ async function single_log(client, file) {
     });
 }
 
-async logs_optimize() {
+async function logs_optimize() {
     return new Promise((resolve, reject) => {
         console.error('ok - optimizing logs');
-        pool.connect((err, client, done) => {
+        pool.connect(async (err, client, done) => {
             if (err) return reject(err);
 
             try {
@@ -126,7 +126,7 @@ async logs_optimize() {
                     ) (
                         SELECT
                             file,
-                            regexp_replace(file, 'runs/(\d+)/.*', '\1')::BIGINT,
+                            regexp_replace(file, 'runs/(\d+)/.*', '\\1')::BIGINT,
                             replace(replace(regexp_replace(file, 'runs/(\d+)/', ''), '/', '-'), '.zip', ''),
                             modified
                         FROM
@@ -152,7 +152,7 @@ async logs_optimize() {
     });
 }
 
-async lookup(client, source) {
+async function lookup(client, source) {
     return new Promise((resolve, reject) => {
         client.query(`
             SELECT
