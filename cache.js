@@ -24,6 +24,7 @@ main();
 async function main() {
     try {
         await logs();
+        convert();
     } catch(err) {
         console.error(err);
     }
@@ -46,20 +47,26 @@ async function logs() {
             `, (err) => {
                 if (err) return reject(err);
 
-                glob(path.resolve(process.argv[3], '*.csv'), {
-                    nodir: false
-                }, async (err, files) => {
+                client.query(`
+                    DELETE FROM logs;
+                `, (err) => {
                     if (err) return reject(err);
 
-                    for (const file of files) {
-                        try {
-                            await single_log(client, file);
-                        } catch (err) {
-                            return reject(new Error(err));
-                        }
-                    }
+                    glob(path.resolve(process.argv[3], '*.csv'), {
+                        nodir: false
+                    }, async (err, files) => {
+                        if (err) return reject(err);
 
-                    return resolve();
+                        for (const file of files) {
+                            try {
+                                await single_log(client, file);
+                            } catch (err) {
+                                return reject(new Error(err));
+                            }
+                        }
+
+                        return resolve();
+                    });
                 });
             });
         });
