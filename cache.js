@@ -23,8 +23,8 @@ main();
 
 async function main() {
     try {
-        await logs();
-        await logs_optimize();
+        //await logs();
+        //await logs_optimize();
         await convert();
     } catch(err) {
         console.error(err);
@@ -161,24 +161,21 @@ async function logs_optimize() {
 }
 
 async function lookup(client, source) {
-    return new Promise((resolve, reject) => {
-        client.query(`
-            SELECT
-                *
-            FROM
-                parsed
-            WHERE
-                source = ${source}
-            ORDER BY
-                modified DESC
-        `, (err, pgres) => {
-            if (err) return reject(err);
+    const pgres = await client.query(`
+        SELECT
+            *
+        FROM
+            parsed
+        WHERE
+            source = '${source}'
+        ORDER BY
+            modified DESC
+        LIMIT 1
+    `);
 
-            console.error(pgres);
+    if (!pgres.rows[0]) return false;
 
-            return resolve();
-        });
-    });
+    return `http://data.openaddresses.io/${pgres.rows[0].file}`;
 }
 
 async function convert() {
@@ -189,7 +186,7 @@ async function convert() {
 
             glob(path.resolve(process.argv[2], 'sources/**/*.json'), {
                 nodir: false
-            }, (err, files) => {
+            }, async (err, files) => {
                 if (err) throw err;
 
                 for (const file of files) {
@@ -197,14 +194,23 @@ async function convert() {
 
                     if (psd.schema === 2) continue;
 
-                    if (psd.coverage.city) name = 'city';
-                    if (psd.coverage.town) name = 'town';
-                    if (psd.coverage.county) name = 'county';
-                    if (psd.coverage.district) name = 'district';
-                    if (psd.coverage.region) name = 'region';
-                    if (psd.coverage.province) name = 'province';
-                    if (psd.coverage.state) name = 'state';
-                    if (psd.coverage.country) name = 'country';
+                    if (psd.coverage.city) {
+                        name = 'city';
+                    } else if (psd.coverage.town) {
+                        name = 'town';
+                    } else if (psd.coverage.county) {
+                        name = 'county';
+                    } else if (psd.coverage.district) {
+                        name = 'district';
+                    } else if (psd.coverage.region) {
+                        name = 'region';
+                    } else if (psd.coverage.province) {
+                        name = 'province';
+                    } else if (psd.coverage.state) {
+                        name = 'state';
+                    } else if (psd.coverage.country) {
+                        name = 'country';
+                    }
 
                     psd.schema = 2;
                     psd.layers = {
@@ -218,6 +224,27 @@ async function convert() {
 
                         psd.layers.addresses[0][key] = psd[key];
                         delete psd[key];
+                    }
+
+                    const url = await lookup(client, path.parse(file.replace(/.*sources\//, '').replace(/\//g, '-')).name);
+                    if (url) {
+                        psd.layers.addresses[0].data = url;
+                        psd.layers.addresses[0].protocol = 'http';
+                        psd.layers.addresses[0].compression = 'zip';
+
+                        psd.layers.addresses[0].conform = {
+                            format: 'csv',
+                            lon: 'LON',
+                            lat: 'LAT',
+                            number: 'NUMBER',
+                            street: 'STREET',
+                            unit: 'UNIT',
+                            city: 'CITY',
+                            district: 'DISTRICT',
+                            region: 'REGION',
+                            postcode: 'POSTCODE',
+                            id: 'ID'
+                        };
                     }
 
                     fs.writeFileSync(file, JSON.stringify(psd, null, 4));
